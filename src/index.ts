@@ -1,4 +1,6 @@
 import { Client, Events, GatewayIntentBits } from 'discord.js';
+import * as db from './db';
+import type { SelectScoreWithRelations } from './db/schema';
 
 const client = new Client({
   intents: [
@@ -52,21 +54,31 @@ function parseWordleResult(message: any): WordleResult | undefined {
   return undefined;
 }
 
-async function processLatestWordleResult(parsedWordle: WordleResult): Promise<WordleResult[]> {
+async function processLatestWordleResult(parsedWordle: WordleResult): Promise<SelectScoreWithRelations[]> {
   // Prevent duplicates
-  const existingResultForUser = wordleResults.find((wordle) => wordle.discordId === parsedWordle.discordId && wordle.gameNumber === parsedWordle.gameNumber);
+  const scoresForCurrentGame = await db.getScoresByGameNumber(parsedWordle.gameNumber);
+  const existingResultForUser = scoresForCurrentGame.find((score: SelectScoreWithRelations) => score.discordId === parsedWordle.discordId);
   if (!existingResultForUser) {
-    wordleResults.push(parsedWordle);
+    await db.createPlayer(parsedWordle.discordId, parsedWordle.userName);
+    if(scoresForCurrentGame.length === 0) {
+      await db.createWordle(parsedWordle.gameNumber);
+    }
+    const addedScore = await db.createScore(parsedWordle.discordId, parsedWordle.gameNumber, parsedWordle.attempts);
+    if(addedScore){
+      scoresForCurrentGame.push(addedScore);
+    } else {
+      console.error(`Error adding result to the database: ${parsedWordle.gameNumber} - ${parsedWordle.userName}`);
+    }
   } else {
     console.log(`Result already exists: ${parsedWordle.gameNumber} - ${parsedWordle.userName}`);
   }
-  return wordleResults;
+  return scoresForCurrentGame;
 }
 
-async function processCurrentResults(currentResults: WordleResult[], message: any) {
+async function processCurrentResults(currentResults: SelectScoreWithRelations[], message: any) {
   try {
     if (currentResults.length > 0) {
-      const winners: WordleResult[] = await determineWinners(currentResults);
+      const winners: SelectScoreWithRelations[] = await determineWinners(currentResults);
       if (winners.length > 0) {
         await informLatestResults(winners, message);
       }
@@ -78,7 +90,7 @@ async function processCurrentResults(currentResults: WordleResult[], message: an
   }
 }
 
-async function determineWinners(results: WordleResult[]): Promise<WordleResult[]> {
+async function determineWinners(results: SelectScoreWithRelations[]): Promise<SelectScoreWithRelations[]> {
   if (!results || results.length === 0) return [];
 
   // Filter out failed attempts (X) before processing
@@ -103,7 +115,7 @@ async function determineWinners(results: WordleResult[]): Promise<WordleResult[]
   );
 }
 
-async function informLatestResults(winners: WordleResult[], message: any) {
+async function informLatestResults(winners: SelectScoreWithRelations[], message: any) {
   const winnerDiscordIds = winners.map(winner => winner.discordId);
   const winnerDiscordTags = winnerDiscordIds.map(id => `<@${id}>`);
 

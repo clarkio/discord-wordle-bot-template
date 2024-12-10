@@ -182,7 +182,7 @@ Now you can start trying out sharing your Wordle results in the text channel thi
 - You should see something like the following message logged: `"Current Winner for Wordle 1,265 with 5 attempts: <@1234567890>"`
 - You should also see a message in the Discord channel from your bot indicating the current winner for the Wordle you entered
   - Example:
-    
+
     ![A screenshot of clarkio sending a message of "test" in a Discord channel and a Wordle result message. The Discord bot responds with a message indicating the current winner for the Wordle game clarkio entered](/images/wordle-bot-response-example.png)
 - Sweet! Now you have a working Discord bot that can parse and process messages containing Wordle results AND it responds with who's winning with the lowest number of attempts for that Wordle game number.
 
@@ -196,7 +196,7 @@ You can use any database technology you'd like to handle storage for your bot bu
 - In your terminal run: `bun add -d drizzle-kit`
 - Create a new file in the root of the project named `local.db`
 - Open the `.env` file and add a key `DB_FILE_NAME` with a value of `local.db`
-  - Example: `DB_FILE_NAME=local.db`
+  - Example: `DB_FILE_NAME=file:local.db`
 - Create a folder `db` in the `src` folder
 - Inside the `db` folder create a new file `index.ts`
 - Add the following code to the contents of `index.ts`:
@@ -265,6 +265,7 @@ You can use any database technology you'd like to handle storage for your bot bu
 
     export type InsertScore = typeof scoresTable.$inferInsert;
     export type SelectScore = typeof scoresTable.$inferSelect;
+    export type SelectScoreWithRelations = SelectScore & { player: SelectPlayer };
     ```
 - In the root of the project add a new file `drizzle.config.ts`
 - Add the following to the contents of `drizzle.config.ts`
@@ -287,5 +288,116 @@ You can use any database technology you'd like to handle storage for your bot bu
 
 ### Save Wordle Results
 With all of that set up, now it's time for you to save the parsed Wordle results shared in your Discord to your database.
+
+- Open up the file `index.ts` in the `src` folder.
+- First we'll need new imports. Add the following to the top of the file:
+  ```ts
+  import * as db from './db';
+  import type { SelectScoreWithRelations } from './db/schema';
+  ```
+- Go to where you initialize the `wordleResults` array and remove it. Search for this `let wordleResults: WordleResult[] = [];` to find it quickly (likely around line 19)
+- Go to the function `processLatestWordleResult`
+- Replace the `processLatestWordleResult` function with the following:
+  ```ts
+  async function processLatestWordleResult(parsedWordle: WordleResult): Promise<SelectScoreWithRelations[]> {
+    // Prevent duplicates
+    const scoresForCurrentGame = await db.getScoresByGameNumber(parsedWordle.gameNumber);
+    const existingResultForUser = scoresForCurrentGame.find((score: SelectScoreWithRelations) => score.discordId === parsedWordle.discordId);
+    if (!existingResultForUser) {
+      await db.createPlayer(parsedWordle.discordId, parsedWordle.userName);
+      if(scoresForCurrentGame.length === 0) {
+        await db.createWordle(parsedWordle.gameNumber);
+      }
+      const addedScore = await db.createScore(parsedWordle.discordId, parsedWordle.gameNumber, parsedWordle.attempts);
+      if(addedScore){
+        scoresForCurrentGame.push(addedScore);
+      } else {
+        console.error(`Error adding result to the database: ${parsedWordle.gameNumber} - ${parsedWordle.userName}`);
+      }
+    } else {
+      console.log(`Result already exists: ${parsedWordle.gameNumber} - ${parsedWordle.userName}`);
+    }
+    return scoresForCurrentGame;
+  }
+  ```
+  - Go to the `processCurrentResults` function and update the `currentResults` parameter type to `SelectScoreWithRelations[]`. Example: `async function processCurrentResults(currentResults: SelectScoreWithRelations[], message: any)`
+  - Do the same for the `winners` variable inside the `processCurrentResults` function so that it's type is `SelectScoreWithRelations[]`. Example: `const winners: SelectScoreWithRelations[] = await determineWinners(currentResults);`
+  - Similarly go to the `determineWinners` function and change the `results` parameter type to `SelectScoreWithRelations[]` as well as the return type within the `Promise<SelectScoreWithRelations[]>`. Example: `async function determineWinners(results: SelectScoreWithRelations[]): Promise<SelectScoreWithRelations[]>`
+  - For the last update to the `index.ts` file go to the `informLatestResults` function and update the `winners` parameter type to `SelectScoreWithRelations[]`. Example: `async function informLatestResults(winners: SelectScoreWithRelations[], message: any)`
+  - Save your changes
+  - Next open the `index.ts` file in the `db` folder.
+  - Replace the entire contents of the file with the following code:
+    ```ts
+    import { drizzle } from 'drizzle-orm/libsql';
+    import { createClient } from "@libsql/client";
+    import { eq, and } from "drizzle-orm";
+    import { playersTable, scoresTable, wordlesTable, type SelectScoreWithRelations } from './schema';
+    import * as schema from './schema';
+
+    const client = createClient({
+      url: process.env.DB_FILE_NAME!,
+    });
+    const db = drizzle(client, { schema });
+
+    export async function getScoresByGameNumber(gameNumber: number): Promise<SelectScoreWithRelations[]> {
+      try {
+        return await db.query.scoresTable.findMany({
+          where: eq(scoresTable.gameNumber, gameNumber), with: {
+            player: true
+          }
+        });
+      } catch (error) {
+        console.error(error);
+        return [];
+      }
+    }
+
+    export async function createWordle(gameNumber: number): Promise<boolean> {
+      try {
+        await db.insert(wordlesTable).values({ gameNumber }).onConflictDoNothing();
+        return true;
+      } catch (error) {
+        console.error(error);
+        return false;
+      }
+    }
+
+    export async function createPlayer(discordId: string, discordName: string): Promise<boolean> {
+      try {
+        await db.insert(playersTable).values({ discordId, discordName }).onConflictDoNothing();
+        return true;
+      } catch (error) {
+        console.error(error);
+        return false;
+      }
+    }
+
+    export async function createScore(discordId: string, gameNumber: number, attempts: string, isWin: number = 0, isTie: number = 0): Promise<SelectScoreWithRelations | undefined> {
+      try {
+        const result = await db.insert(scoresTable).values({ discordId, gameNumber, attempts, isWin, isTie }).onConflictDoNothing().returning();
+        if (result.length === 0) {
+          return undefined;
+        }
+        const score = await db.query.scoresTable.findFirst({
+          where: and(eq(scoresTable.gameNumber, gameNumber), eq(scoresTable.discordId, discordId)), with: {
+            player: true
+          }
+        });
+        return score;
+      } catch (error) {
+        console.error(error);
+        return;
+      }
+    }
+    ```
+    - Open up your terminal and run `bunx drizzle-kit studio`
+    - Open your browser to [https://local.drizzle.studio](https://local.drizzle.studio) to see a UI for the data in your database.
+    - Open up a new terminal window and run `bun run src/index.ts`
+    - Go to your Discord server where you added your bot and share a wordle result as a message. You can use the example one from the "Sharing Wordles" section earlier.
+    - Go back to your browser with the UI for the database and refresh the page to see if the Wordle result you shared in Discord was saved successfully.
+    - Congrats you've completed this section and have a persistent Discord Wordle Bot working!
+
+## Deploying
+Now that you have everything working you'll realize the bot only runs when you start it up on your machine. What if you want it to run all the time? You need to deploy it somewhere that can host the bot for you. You have *a lot* of options (both free and paid) when it comes to hosting so if you already have a provider you like to use then go with that.
 
 - TODO

@@ -49,3 +49,4 @@ export type SelectPlayer = typeof playersTable.$inferSelect;
 
 export type InsertScore = typeof scoresTable.$inferInsert;
 export type SelectScore = typeof scoresTable.$inferSelect;
+export type SelectScoreWithRelations = SelectScore & { player: SelectPlayer };
