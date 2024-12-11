@@ -128,7 +128,7 @@ Now that you have a Discord bot that connects and listens for messages you need 
   const parsedWordle = parseWordleResult(message);
   if (parsedWordle) {
     const currentResults = await processLatestWordleResult(parsedWordle);
-    await processCurrentResults(currentResults, parsedWordle, message);
+    await processCurrentResults(currentResults, message);
   } else {
     console.log('Message was determined to not be intended for the bot');
   }
