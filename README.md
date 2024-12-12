@@ -138,27 +138,17 @@ Now that you have a Discord bot that connects and listens for messages you need 
   async function processLatestWordleResult(parsedWordle: WordleResult): Promise<WordleResult[]> {
     // Prevent duplicates
     const existingResultForUser = wordleResults.find((wordle) => wordle.discordId === parsedWordle.discordId && wordle.gameNumber === parsedWordle.gameNumber);
+  
+    const scoresForCurrentGame = wordleResults.filter((wordle) => wordle.gameNumber === parsedWordle.gameNumber) || [];
+  
     if (!existingResultForUser) {
       wordleResults.push(parsedWordle);
+      scoresForCurrentGame.push(parsedWordle);
     } else {
       console.log(`Result already exists: ${parsedWordle.gameNumber} - ${parsedWordle.userName}`);
     }
-    return wordleResults;
-  }
-
-  async function processCurrentResults(currentResults: WordleResult[], message: any) {
-    try {
-      if (currentResults.length > 0) {
-        const winners: WordleResult[] = await determineWinners(currentResults);
-        if (winners.length > 0) {
-          await informLatestResults(winners, message);
-        }
-      } else {
-        console.log('No results from processing the latest Wordle result.');
-      }
-    } catch (error) {
-      console.error('Error processing Wordle Result:', error);
-    }
+  
+    return scoresForCurrentGame;
   }
   ```
 
